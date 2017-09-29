@@ -1,0 +1,46 @@
+jobs:
+  build:
+    docker:
+      - image: alpine:3.6
+        environment:
+          SERVICE: billing-bdd-testing-service
+          UW_DOCKER_REGISTRY: registry.uw.systems
+          UW_DOCKER_USER: billing
+    steps:
+      - checkout
+      - setup_remote_docker:
+          version: 17.07.0-ce
+      - run: apk --no-cache add curl git make
+      - run:
+          name: Install Docker client
+          command: |
+            set -x
+            VER="17.05.0-ce"
+            curl -L -o /tmp/docker-$VER.tgz https://get.docker.com/builds/Linux/x86_64/docker-$VER.tgz
+            tar -xz -C /tmp -f /tmp/docker-$VER.tgz
+            mv /tmp/docker/* /usr/bin
+      - run:
+          name: Install Docker Compose
+          command: |
+            apk --no-cache add py-pip
+            pip install docker-compose
+      - run: docker login -u $UW_DOCKER_USER -p $UW_DOCKER_PASS $UW_DOCKER_REGISTRY
+      - run: docker-compose up -d
+      - run: docker-compose logs
+      - run:
+          name: Build
+          command: |
+            docker build --build-arg "GITHUB_TOKEN=$GITHUB_TOKEN" --build-arg SERVICE=$SERVICE -t $SERVICE-build -f Dockerfile.build .
+      - run:
+          name: Run tests
+          command: |
+            docker run --net=project_default $SERVICE-build sh -c 'apk --update add make && make lint && make test'
+      - deploy:
+          name: Push to registry and deploy
+          command: |
+            if [ "${CIRCLE_BRANCH}" == "master" ]; then
+              docker build --build-arg SERVICE=$SERVICE -t $UW_DOCKER_REGISTRY/$UW_DOCKER_USER/$SERVICE:$CIRCLE_SHA1 .
+              docker tag $UW_DOCKER_REGISTRY/$UW_DOCKER_USER/$SERVICE:$CIRCLE_SHA1 $UW_DOCKER_REGISTRY/$UW_DOCKER_USER/$SERVICE:latest
+              docker push $UW_DOCKER_REGISTRY/$UW_DOCKER_USER/$SERVICE
+              docker run -it -e KUBERNETES_TOKEN=$KUBERNETES_TOKEN quay.io/guidesmiths/kube-deploy --insecure-https --url https://elb.master.k8s.dev.uw.systems --namespace billing deployment/$SERVICE $SERVICE $UW_DOCKER_REGISTRY/$UW_DOCKER_USER/$SERVICE:$CIRCLE_SHA1
+            fi

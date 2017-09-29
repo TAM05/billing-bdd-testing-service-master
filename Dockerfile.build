@@ -1,0 +1,1 @@
+FROM registry.uw.systems/base_images/uw-alpine-golang-v1.9-build:latest
